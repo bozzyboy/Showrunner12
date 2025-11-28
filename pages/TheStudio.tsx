@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { useShowrunnerStore } from '../store/showrunnerStore';
 import { Scene, Shot, GeminiModel } from '../types';
 import { DirectorDeck } from '../components/studio/DirectorDeck';
-import { Clapperboard, Film, PlusCircle, Archive, Sparkles, Download, Upload, Trash2, Lock, Unlock } from 'lucide-react';
+import { Clapperboard, Film, PlusCircle, Archive, BrainCircuit, Wand2, Sparkles, Download, Upload, Trash2, Lock, Unlock } from 'lucide-react';
 import { saveStudio } from '../services/storageService';
 
 const TheStudio: React.FC = () => {
-    const { project, addShot, updateShot, deleteShot, importStudio } = useShowrunnerStore(); 
+    const { project, addShot, updateShot, deleteShot, generateShotsForScene, importStudio } = useShowrunnerStore(); 
     const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
     const [activeShotId, setActiveShotId] = useState<string | null>(null);
+    const [isGeneratingShots, setIsGeneratingShots] = useState(false);
 
     // --- PAGE LEVEL CONTROLS (Global to The Studio) ---
     const [selectedTextModel, setSelectedTextModel] = useState<GeminiModel>('gemini-2.5-flash');
@@ -47,6 +48,22 @@ const TheStudio: React.FC = () => {
     const handleAddShot = () => {
         if (!activeSceneId) return;
         addShot(activeSceneId);
+    };
+
+    const handleGenerateShots = async () => {
+        if (!activeSceneId) return;
+        if (activeShots.length > 0) {
+            if (!confirm("This scene already has shots. Generating new ones will overwrite them. Continue?")) return;
+        }
+        setIsGeneratingShots(true);
+        try {
+            await generateShotsForScene(activeSceneId);
+        } catch (e) {
+            alert("Failed to generate shots.");
+            console.error(e);
+        } finally {
+            setIsGeneratingShots(false);
+        }
     };
 
     const handleShotDescriptionChange = (shotId: string, newDesc: string) => {
@@ -165,6 +182,12 @@ const TheStudio: React.FC = () => {
                             <h2 className="font-bold text-primary flex items-center gap-2"><Film size={18}/> Shots</h2>
                         </div>
                         <div className="flex gap-2">
+                            {/* RESTORED MAGIC WAND BUTTON */}
+                            {activeSceneId && (
+                                <button onClick={handleGenerateShots} disabled={isGeneratingShots} className="text-muted hover:text-accent disabled:opacity-30" title="AI Generate Shot List">
+                                    {isGeneratingShots ? <BrainCircuit size={18} className="animate-spin"/> : <Wand2 size={18}/>}
+                                </button>
+                            )}
                             <button onClick={handleAddShot} disabled={!activeSceneId} className="text-muted hover:text-primary disabled:opacity-30" title="Add Shot Manually"><PlusCircle size={18}/></button>
                         </div>
                     </div>
@@ -173,12 +196,24 @@ const TheStudio: React.FC = () => {
                         <div className="p-8 text-center text-muted text-sm">Select a scene</div>
                     ) : (
                         <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                            {activeShots.length === 0 && (
+                            {activeShots.length === 0 && !isGeneratingShots && (
                                 <div className="p-4 text-center">
                                     <p className="text-muted text-xs mb-4">No shots planned.</p>
-                                    <button onClick={handleAddShot} className="w-full py-2 bg-primary text-neutral-900 text-xs font-bold rounded hover:bg-white flex items-center justify-center gap-2">
-                                        <PlusCircle size={14}/> Add First Shot
-                                    </button>
+                                    <div className="flex flex-col gap-2">
+                                        <button onClick={handleGenerateShots} className="w-full py-2 bg-primary text-neutral-900 text-xs font-bold rounded hover:bg-white flex items-center justify-center gap-2">
+                                            <Wand2 size={14}/> Auto-Generate Shot List
+                                        </button>
+                                        <button onClick={handleAddShot} className="w-full py-2 bg-panel border border-subtle text-primary-text text-xs font-bold rounded hover:bg-neutral-700 flex items-center justify-center gap-2">
+                                            <PlusCircle size={14}/> Add Manually
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {isGeneratingShots && (
+                                <div className="p-8 flex flex-col items-center justify-center text-muted">
+                                    <BrainCircuit size={24} className="animate-spin text-accent mb-2"/>
+                                    <p className="text-xs">Directing Scene...</p>
                                 </div>
                             )}
                             

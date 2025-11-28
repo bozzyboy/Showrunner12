@@ -1,4 +1,4 @@
-import { Project, Bible, Script, Season, Sequel, ContinuityBrief, Studio } from '../types';
+import { Project, Bible, Script, Season, Sequel, ContinuityBrief, Studio, Shot } from '../types';
 import JSZip from 'jszip';
 import saveAs from 'file-saver';
 import { v4 as uuidv4 } from 'uuid';
@@ -20,54 +20,74 @@ const getFileName = (projectName: string, extension: string) => {
 }
 
 // --- INTELLIGENT NAMING & FOLDER CLASSIFICATION ---
-// (Preserved from your original code to ensure friendly filenames)
 
+// Determines the friendly filename (e.g., Char_Bob_img123.png)
 const findContextForImageId = (id: string, project: Project): string | null => {
+    // 1. Bible Characters
     const char = project.bible.characters.find(c => c.profile.generatedImageUrl === id);
     if (char) return `Char_${char.profile.name.replace(/[^a-zA-Z0-9]/g, '')}`; 
     
+    // 2. Bible Locations
     const loc = project.bible.locations.find(l => l.baseProfile.visuals.generatedImageUrl === id);
     if (loc) return `Loc_${loc.baseProfile.identity.name.replace(/[^a-zA-Z0-9]/g, '')}`;
     
+    // 3. Bible Props
     const prop = project.bible.props.find(p => p.baseProfile.visuals.generatedImageUrl === id);
     if (prop) return `Prop_${prop.baseProfile.identity.name.replace(/[^a-zA-Z0-9]/g, '')}`;
     
-    // Scan shots
+    // 4. Studio Shots
+    // We need to scan all scenes to find where this shot lives
     let shotName = null;
     const isEpisodic = project.format.type === 'EPISODIC';
-    const scanShots = (shots: any[], prefix: string) => {
+    
+    const scanShots = (shots: Shot[], prefix: string) => {
         const shot = shots.find(s => s.generatedImageUrl === id);
-        if (shot) shotName = `${prefix}_Shot${shot.shotNumber}`;
+        if (shot) {
+            shotName = `${prefix}_Shot${shot.shotNumber}`;
+        }
     };
 
     if (isEpisodic && project.script.seasons) {
-        project.script.seasons.forEach(s => s.episodes.forEach(e => e.scenes.forEach(sc => {
-            if (project.studio.shotsByScene[sc.id]) scanShots(project.studio.shotsByScene[sc.id], `S${s.seasonNumber}E${e.episodeNumber}_Sc${sc.sceneNumber}`);
-        })));
+        project.script.seasons.forEach(s => {
+            s.episodes.forEach(e => {
+                e.scenes.forEach(sc => {
+                    const shots = project.studio.shotsByScene[sc.id];
+                    if (shots) scanShots(shots, `S${s.seasonNumber}E${e.episodeNumber}_Sc${sc.sceneNumber}`);
+                });
+            });
+        });
     } else if (project.script.sequels) {
-        project.script.sequels.forEach(s => s.acts.forEach(a => a.scenes.forEach(sc => {
-            if (project.studio.shotsByScene[sc.id]) scanShots(project.studio.shotsByScene[sc.id], `P${s.partNumber}A${a.actNumber}_Sc${sc.sceneNumber}`);
-        })));
+        project.script.sequels.forEach(s => {
+            s.acts.forEach(a => {
+                a.scenes.forEach(sc => {
+                    const shots = project.studio.shotsByScene[sc.id];
+                    if (shots) scanShots(shots, `P${s.partNumber}A${a.actNumber}_Sc${sc.sceneNumber}`);
+                });
+            });
+        });
     }
+
     return shotName;
 };
 
+// Determines which folder the image goes into (artdept, shots, or history)
 const classifyImageFolder = (id: string, project: Project): string => {
-    // 1. Art Dept
+    // 1. ART DEPT (Highest Priority: Active Bible Assets)
     if (project.bible.characters.some(c => c.profile.generatedImageUrl === id) ||
         project.bible.locations.some(l => l.baseProfile.visuals.generatedImageUrl === id) ||
-        project.bible.props.some(p => p.baseProfile.visuals.generatedImageUrl === id)) return 'artdept';
+        project.bible.props.some(p => p.baseProfile.visuals.generatedImageUrl === id)) {
+        return 'artdept';
+    }
 
-    // 2. Shots
+    // 2. SHOTS (Active Studio Shots)
     let isShot = false;
     Object.values(project.studio.shotsByScene || {}).forEach(shots => {
         if (shots.some(s => s.generatedImageUrl === id)) isShot = true;
     });
     if (isShot) return 'shots';
 
-    // 3. References
-    // (Simplified check)
-    return 'assets';
+    // 3. HISTORY (Everything else: Reference images, old generations, unused assets)
+    return 'history';
 };
 
 // --- INDEXED DB SETUP ---
@@ -181,7 +201,7 @@ async function exportDataWithImages(data: any, baseFileName: string, extension: 
         const jsonString = JSON.stringify(data, null, 2);
         
         // Save main data file. Use 'project.json' for full projects, 'data.json' for sub-modules
-        const mainDataFile = extension === 'showrunner' ? 'project.json' : 'data.json';
+        const mainDataFile = extension === 'zip' || extension === 'showrunner' ? 'project.json' : 'data.json';
         zip.file(mainDataFile, jsonString);
 
         // Find Image IDs
@@ -201,14 +221,19 @@ async function exportDataWithImages(data: any, baseFileName: string, extension: 
                 if (blob) {
                     const ext = blob.type === 'image/jpeg' ? 'jpg' : 'png';
                     
-                    // Attempt to give it a nice name if we have project context
+                    // Default to ID filename in 'history' folder
                     let filename = `${id}.${ext}`;
-                    let folder = 'assets';
+                    let folder = 'history';
 
+                    // If we have context, classify it properly
                     if (projectContext) {
-                        const friendly = findContextForImageId(id, projectContext);
-                        if (friendly) filename = `${friendly}__${id}.${ext}`;
-                        folder = classifyImageFolder(id, projectContext);
+                        const friendlyName = findContextForImageId(id, projectContext);
+                        const classification = classifyImageFolder(id, projectContext);
+                        
+                        folder = classification;
+                        if (friendlyName) {
+                            filename = `${friendlyName}__${id}.${ext}`;
+                        }
                     }
 
                     zip.folder(folder)?.file(filename, blob);
@@ -232,14 +257,12 @@ async function importDataWithImages<T>(extension: string): Promise<T | null> {
     return new Promise((resolve) => {
         const input = document.createElement('input');
         input.type = 'file';
-        // Accept the custom extension, raw zip, AND legacy formats
         input.accept = `.${extension},.zip,.showrunner,.json`; 
         
         input.onchange = async (e) => {
             const file = (e.target as HTMLInputElement).files?.[0];
             if (!file) { resolve(null); return; }
 
-            // STRATEGY: Try Zip first. If fails, try Text (Legacy).
             try {
                 const zip = await JSZip.loadAsync(file);
                 
@@ -265,10 +288,8 @@ async function importDataWithImages<T>(extension: string): Promise<T | null> {
                     }
                 });
 
-                // Wait for all blobs to load BEFORE touching DB
                 await Promise.all(promises);
 
-                // Calculate hashes BEFORE transaction to avoid "Transaction inactive" error
                 const preparedImages: { id: string, blob: Blob, hash: string }[] = [];
                 for (const item of imagesToStore) {
                     const hash = await computeBlobHash(item.blob);
@@ -295,7 +316,6 @@ async function importDataWithImages<T>(extension: string): Promise<T | null> {
                 }
 
                 // 3. EXTRACT DATA JSON
-                // Look for project.json (Full), data.json (Module), or fallback
                 let dataFile = zip.file("project.json") || zip.file("data.json");
                 if (!dataFile) {
                     const jsonFiles = zip.file(/\.json$/);
@@ -308,7 +328,7 @@ async function importDataWithImages<T>(extension: string): Promise<T | null> {
                 resolve(JSON.parse(jsonText));
 
             } catch (zipError) {
-                // If Zip failed, maybe it's a Legacy JSON text file
+                // Legacy JSON text file fallback
                 try {
                     const text = await file.text();
                     if (text.trim().startsWith('{')) {
@@ -328,7 +348,7 @@ async function importDataWithImages<T>(extension: string): Promise<T | null> {
     });
 }
 
-// --- PROJECT PERSISTENCE (AUTOSAVE) ---
+// --- PROJECT PERSISTENCE ---
 
 export const saveProjectToDB = async (project: Project) => {
   try {
@@ -362,30 +382,27 @@ export const loadProjectFromDB = async (): Promise<Project | null> => {
 
 // --- EXPORT FUNCTIONS ---
 
+// MAIN PROJECT SAVE (Now back to .zip)
 export async function saveProject(project: Project, onStatusUpdate?: (status: string) => void) {
-    // Pass 'project' as context to get nice filenames
-    await exportDataWithImages(project, project.metadata.name, 'showrunner', project, onStatusUpdate);
+    await exportDataWithImages(project, project.metadata.name, 'zip', project, onStatusUpdate);
 }
 
+// MODULE SAVES
 export async function saveStudio(project: Project) {
     if (!project.studio) return;
-    // Pass 'project' context so shots can be named "S1E1_Sc5_Shot2.jpg" inside the zip
     await exportDataWithImages(project.studio, `${project.metadata.name}_Studio`, 'thestudio', project);
 }
 
 export async function saveArtDept(project: Project) {
     if (!project.bible) return;
-    // Art Dept is the Bible + Images
     await exportDataWithImages(project.bible, `${project.metadata.name}_ArtDept`, 'artdept', project);
 }
 
 export async function saveBible(project: Project) {
-    // Standard bible export, now with images too
     await exportDataWithImages(project.bible, project.metadata.name, 'bible', project);
 }
 
 export async function saveScript(project: Project) {
-    // Script usually has no images, but using the same helper is safe
     await exportDataWithImages(project.script, project.metadata.name, 'script', project);
 }
 
@@ -407,7 +424,7 @@ export function saveContinuityBrief(project: Project, installment: Season | Sequ
 // --- IMPORT FUNCTIONS ---
 
 export const selectAndLoadProjectFile = async () => {
-    const project = await importDataWithImages<Project>('showrunner');
+    const project = await importDataWithImages<Project>('zip');
     if (project) await saveProjectToDB(project);
     return project;
 };
