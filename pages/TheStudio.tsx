@@ -182,13 +182,20 @@ const TheStudio: React.FC = () => {
                             <h2 className="font-bold text-primary flex items-center gap-2"><Film size={18}/> Shots</h2>
                         </div>
                         <div className="flex gap-2">
-                            {/* RESTORED MAGIC WAND BUTTON */}
                             {activeSceneId && (
                                 <button onClick={handleGenerateShots} disabled={isGeneratingShots} className="text-muted hover:text-accent disabled:opacity-30" title="AI Generate Shot List">
                                     {isGeneratingShots ? <BrainCircuit size={18} className="animate-spin"/> : <Wand2 size={18}/>}
                                 </button>
                             )}
-                            <button onClick={handleAddShot} disabled={!activeSceneId} className="text-muted hover:text-primary disabled:opacity-30" title="Add Shot Manually"><PlusCircle size={18}/></button>
+                            {/* Disable Add button if no shots exist (forcing auto-gen first) */}
+                            <button 
+                                onClick={handleAddShot} 
+                                disabled={!activeSceneId || activeShots.length === 0} 
+                                className="text-muted hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed" 
+                                title={activeShots.length === 0 ? "Generate shot list first" : "Add Shot Manually"}
+                            >
+                                <PlusCircle size={18}/>
+                            </button>
                         </div>
                     </div>
                     
@@ -198,15 +205,10 @@ const TheStudio: React.FC = () => {
                         <div className="flex-1 overflow-y-auto p-2 space-y-2">
                             {activeShots.length === 0 && !isGeneratingShots && (
                                 <div className="p-4 text-center">
-                                    <p className="text-muted text-xs mb-4">No shots planned.</p>
-                                    <div className="flex flex-col gap-2">
-                                        <button onClick={handleGenerateShots} className="w-full py-2 bg-primary text-neutral-900 text-xs font-bold rounded hover:bg-white flex items-center justify-center gap-2">
-                                            <Wand2 size={14}/> Auto-Generate Shot List
-                                        </button>
-                                        <button onClick={handleAddShot} className="w-full py-2 bg-panel border border-subtle text-primary-text text-xs font-bold rounded hover:bg-neutral-700 flex items-center justify-center gap-2">
-                                            <PlusCircle size={14}/> Add Manually
-                                        </button>
-                                    </div>
+                                    <p className="text-muted text-xs mb-4">No shots planned. Please auto-generate the initial shot list to begin.</p>
+                                    <button onClick={handleGenerateShots} className="w-full py-2 bg-primary text-neutral-900 text-xs font-bold rounded hover:bg-white flex items-center justify-center gap-2">
+                                        <Wand2 size={14}/> Auto-Generate Shot List
+                                    </button>
                                 </div>
                             )}
                             
